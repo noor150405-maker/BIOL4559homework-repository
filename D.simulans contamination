@@ -1,0 +1,65 @@
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("Rsamtools")
+
+library(ggplot2)
+library(data.table)
+library(foreach)
+library(doMC)
+registerDoMC(2)
+library(Rsamtools)
+
+chroms <- c("2L", "2R", "3L", "3R", "X")
+
+fl <- system("ls -d /standard/BerglandTeach/data/Contamination_test/mapping_output/*/*.srt.flt.bam", intern=T)
+fl2 <- system("ls -d /standard/BerglandTeach/mapping_output/*PRJNA304655*/*.original.bam", intern=T)
+
+rd <- foreach(bamFile=fl, .combine="rbind")%dopar%{
+  message(bamFile)
+  
+  if(!file.exists(paste(bamFile, ".bai", sep=""))) indexBam(bamFile)
+  stats <- as.data.table(idxstatsBam(bamFile))
+  
+  setkey(stats, seqnames)
+  stats_small <- stats[J(c(chroms, paste0("sim_", chroms)))]
+  stats_small[grepl("sim", seqnames),species:="sim"]
+  stats_small[!grepl("sim", seqnames),species:="mel"]
+  
+  stats_small.ag <- stats_small[,list(mapped=sum(mapped), seqlength=sum(seqlength)), list(species)]
+  
+  out <- data.table(propSim= stats_small.ag[species=="sim"]$mapped/sum( stats_small.ag$mapped))
+  
+  out[,nSim:=as.numeric(tstrsplit(bamFile, "\\.")[[8]])]
+  out[,nMel:=as.numeric(tstrsplit(bamFile, "\\.")[[10]])]
+  out[,samp:=last(tstrsplit(bamFile, "/"))]
+  
+  return(out)
+}
+rd[,realProp:=nSim/(nSim+nMel)]
+
+rd2 <- foreach(bamFile=fl2, .combine="rbind")%dopar%{
+  message(bamFile)
+  
+  if(!file.exists(paste(bamFile, ".bai", sep=""))) indexBam(bamFile)
+  stats <- as.data.table(idxstatsBam(bamFile))
+  
+  setkey(stats, seqnames)
+  stats_small <- stats[J(c(chroms, paste0("sim_", chroms)))]
+  stats_small[grepl("sim", seqnames),species:="sim"]
+  stats_small[!grepl("sim", seqnames),species:="mel"]
+  
+  stats_small.ag <- stats_small[,list(mapped=sum(mapped), seqlength=sum(seqlength)), list(species)]
+  
+  out <- data.table(propSim= stats_small.ag[species=="sim"]$mapped/sum( stats_small.ag$mapped))
+  out[,samp:=last(tstrsplit(bamFile, "/"))]
+  
+  return(out)
+}
+
+ggplot(data=rd, aes(x=realProp, y=propSim)) + 
+  geom_point() +
+  geom_hline(data=rd2, aes(yintercept=propSim, color=samp)) +
+  labs(x = "True Contamination rate",
+       y = "Estimated Contamination rate",
+       color = "Sample")
